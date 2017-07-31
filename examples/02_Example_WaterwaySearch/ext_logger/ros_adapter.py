@@ -335,6 +335,7 @@ class pack_AirVehicleState(object):
             
             # sudo apt install ros-kinetic-geodesy # also installs python-pyproj... need to find a non-ROS-kinetic library for this (python-pyproj direct?)
             import geodesy # technically doesn't include ROS nodes, though is a ROS package apparently???
+            import geodesy.utm
             # geographic_msgs/GeoPoint (lat-long-alt in deg.meters) <-> WGS84 x-y-z format
             #utm_pt = geodesy.utm.fromLatLong(latitude,longitude,curwayptAltitude)
             #x = utm_pt.northing
@@ -344,8 +345,8 @@ class pack_AirVehicleState(object):
             xoffset = utm_pt.northing
             yoffset = -utm_pt.easting
             #zoffset = utm_pt.altitude
-            utm_pt = geodesy.utm.UTMPoint(-y + yoffset, x + xoffset) # as: (easting, northing, altitude)
-            wgs84_pt = geodesy.toMsg() # gives back a geographic_msgs/GeoPoint
+            utm_pt_with_offset = geodesy.utm.UTMPoint(-y + yoffset, x + xoffset, curwayptAltitude, utm_pt.zone, utm_pt.band) # as: (easting, northing, altitude, zone, band)
+            wgs84_pt = utm_pt_with_offset.toMsg() # gives back a geographic_msgs/GeoPoint (putting it back in lat-long-alt format again)
             latitude = wgs84_pt.latitude + curwayptLatStart
             longitude = wgs84_pt.longitude + curwayptLatStart
             # cheating on Altitude and AltitudeType here, is going to be "looping around"/reusing from received MissionCommand data...
