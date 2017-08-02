@@ -51,7 +51,7 @@ sys.path.append(file_dir + '/../../../..') # modify sys.path to include director
 #print("sys.path = %r\n" % sys.path)
 
 from rss_git_lite.common import rosConnectWrapper as rC
-#from rss_git_lite.common import ws4pyRosMsgSrvFunctions_gen as ws4pyROS
+from rss_git_lite.common import ws4pyRosMsgSrvFunctions_gen as wsG #ws4pyROS
 from rss_git_lite.common import getConnectionIPaddress as gC
 from rss_git_lite.common import ws4pyFunctions as wsF
 from rss_git_lite.common import ws4pyRosParamFunctions as wsPF
@@ -97,9 +97,90 @@ def bound(num,minmax):
     if num > maxmin[1]:
         num = maxmin[1]
     return num
+    
+def pack_pose(datalist):
+    """
+    datalist = [ [x,y,...] , waytype ]
 
+    waytype = 1 is [x,y] format
+    waytype = 2 is [x,y,z,qx,qy,qz,qw] format
+    
+    if no waytype is given(??) then default waytpe=1
+    """
+    # different bit here, need to pack the datalist a bit harder:
+    #waypoints_var = datalist[0]
+    if (len(datalist)<2): # this isn't quite right, will get confused if only list-of-lists given
+        waypoints_var = datalist
+        waytype=1
+    else:
+        #waypoints_var = datalist[0]
+        #waytype = datalist[1]
+        [waypoints_var, waytype] = datalist[0:2] # = datalist
 
-class pack_SessionStatus(object):
+    if waytype == 1:
+        [x,y] = waypoints_var
+        z = qx = qy = qz = qw = 0
+    elif waytype == 2:
+        [x,yz,qx,qy,qz,qw] = waypoints_var
+    else: # unknown waytype, bad
+        return None
+
+    json_pose = {'position': {'x': x, 'y': y, 'z': z}, 'orientation': {'x': qx, 'y': qy, 'z': qz, 'w': qw}}
+    return json_pose
+
+def convertLatLongAlttoXYAlt(Lat,Long,Alt):
+    """
+    input: Lat in deg.meters
+           Long in deg.meters
+           Alt in deg.meters
+    output: [X,Y,Alt(Z)] in meters(?)
+    
+    geographic_msgs/GeoPoint (lat-long-alt in deg.meters) <-> WGS84 x-y-z format
+    
+    sudo apt install ros-kinetic-geodesy # also installs python-pyproj... need to find a non-ROS-kinetic library for this (python-pyproj direct?)
+    """
+    import geodesy # technically doesn't include ROS nodes, though is a ROS package apparently???
+    import geodesy.utm
+    # geographic_msgs/GeoPoint (lat-long-alt in deg.meters) <-> WGS84 x-y-z format
+    utm_pt = geodesy.utm.fromLatLong(Lat,Long,Alt)
+    X = utm_pt.northing
+    Y = -utm_pt.easting
+    Alt = utm_pt.altitude
+
+    return [X,Y,Alt]
+
+def convertXYAlttoLatLongAlt(offsetLatLongAlt,X,Y,Alt):
+    """
+    input: offsetLatLongAlt=[offsetLat,offsetLong,offsetAlt] in deg.meters
+           X in meters(?)
+           Y in meters(?),
+           Alt in meters(?)
+    output: [Lat,Long,Alt] in deg.meters
+    
+    geographic_msgs/GeoPoint (lat-long-alt in deg.meters) <-> WGS84 x-y-z format
+    
+    sudo apt install ros-kinetic-geodesy # also installs python-pyproj... need to find a non-ROS-kinetic library for this (python-pyproj direct?)
+    """
+    [offsetLat, offsetLong] = offsetLatLong
+    
+    import geodesy # technically doesn't include ROS nodes, though is a ROS package apparently???
+    import geodesy.utm
+    # get offsets translated back to x-y-z for "global-local" coords
+    utm_pt = geodesy.utm.fromLatLong(offsetLat,offsetLong,offsetAlt)
+    xoffset = utm_pt.northing
+    yoffset = -utm_pt.easting
+    zoffset = utm_pt.altitude
+    utm_pt_with_offset = geodesy.utm.UTMPoint(-Y + yoffset, X + xoffset, Alt + zoffset, utm_pt.zone, utm_pt.band) # as: (easting, northing, altitude, zone, band)
+    wgs84_pt = utm_pt_with_offset.toMsg() # gives back a geographic_msgs/GeoPoint (putting it back in lat-long-alt format again) # *** Matthew reports possible issues here ***
+    Lat = wgs84_pt.latitude
+    Long = wgs84_pt.longitude
+    #Alt = wgs84_pt.altitude
+    # cheating on Altitude and AltitudeType here, is going to be "looping around"/reusing from received MissionCommand data...
+    
+    return [Lat,Long,Alt]
+
+#class pack_SessionStatus(object):
+def pack_SessionStatus(dictdatalist):
     """
     Gazebo I/O: http://gazebosim.org/tutorials?tut=ros_comm
     ---
@@ -110,54 +191,58 @@ class pack_SessionStatus(object):
     afrl.cmasi.SessionStatus
     str({'datatype': 'CMASI/SessionStatus', 'datastring': str({'Parameters': [], 'State': 1, 'RealTimeMultiple': 1.0, 'ScenarioTime': ????, 'StartTime': 0})})
     """
-    def __init__(self):
-        self.timescalled = 0
-        self.dict_clock = None
+#    def __init__(self):
+#        self.timescalled = 0
+#        self.dict_clock = None
         
-    def pack(dictdatalist): # is list containing a single "dictmsg" (as jsondict['msg'])
-        """
-        currently, assumes gazebo has started first and is already running
-        (this is not trying to track Gazebo state / status)
-        -- to add this functionality, try:
-           1) checking new time info against old saved info before overwriting self.dict_clock
-              (in order to infer the Gazebo sim. state)
-           2) set 'datastring.State' to something closer to "reality"
-        """
+#    def pack(dictdatalist): # is list containing a single "dictmsg" (as jsondict['msg'])
+    """
+    currently, assumes gazebo has started first and is already running
+    (this is not trying to track Gazebo state / status)
+    -- to add this functionality, try:
+       1) checking new time info against old saved info before overwriting self.dict_clock
+          (in order to infer the Gazebo sim. state)
+       2) set 'datastring.State' to something closer to "reality"
+    """
+    
+    numNones = 0
+    #holddictdatalist = [self.dict_clock, self.dict_odom, self.dict_imu, self.dict_curwaypt]
+    for i in range(len(dictdatalist)):
+        #if not (dictdatalist[i] is None): # get have new data, should save and use that
+        #    holddictdatalist[i] = dictdatalist[i]
+        #if holddictdatalist[i] is None:
+        if dictdatalist[i] is None:
+            numNones = numNones + 1
+    
+    if numNones > 0: # this should only happen on the first few calls if not given the dicts first
+        print("WARNING: pack_SessionStatus() doesn't have enough data to build struct, skipping send...")
+        return None
+    else: # we have enough data to give back a packaged JSON dict for sending!
+        [dict_clock] = holddictdatalist
         
-        if not (dictdatalist[i] is None): # get have new data, should save and use that
-            holddictdatalist[i] = dictdatalist[i]
-            if holddictdatalist[i] is None:
-                numNones = numNones + 1
+        #timescalled = timescalled + 1
+
+        time_in_msecs = dict_clock['clock']['secs']*1000 + int(dict_clock['clock']['nsecs']/1000000)
+
+        dicadd = {'Parameters': [],
+                  'State': 1, # simulation is... Stopped=0, Running=1, Paused=2, Reset=3
+                  'RealTimeMultiple': 1.0,
+                  'ScenarioTime': time_in_msecs, # units: millisecond
+                  'StartTime': 0 # The simulation or scenario start time. This is absolute time in milliseconds since epoch (1 Jan 1970 00:00 GMT). If this field is zero, then no start time is specfied and each sim component is to use the first receipt of this Struct with a SimStatus of "Running" as the start time.
+                 }
         
-        if numNones > 0: # this should only happen on the first few calls if not given the dicts first
-            print("WARNING: " + type(self) + " doesn't have enough data to build struct, skipping send...")
-            return None
-        else: # we have enough data to give back a packaged JSON dict for sending!
-            [self.dict_clock] = holddictdatalist
-            
-            self.timescalled = self.timescalled + 1
+        #
+        # putting it all together...
+        #
+        
+        dictpack = {'datatype': 'CMASI/SessionStatus', \
+                    'datastring': str(dictadd) \
+                   }
+        
+        return dictpack
 
-            time_in_msecs = self.dict_clock['clock']['secs']*1000 + int(self.dict_clock['clock']['nsecs']/1000000)
-
-            dicadd = {'Parameters': [],
-                      'State': 1, # simulation is... Stopped=0, Running=1, Paused=2, Reset=3
-                      'RealTimeMultiple': 1.0,
-                      'ScenarioTime': time_in_msecs, # units: millisecond
-                      'StartTime': 0 # The simulation or scenario start time. This is absolute time in milliseconds since epoch (1 Jan 1970 00:00 GMT). If this field is zero, then no start time is specfied and each sim component is to use the first receipt of this Struct with a SimStatus of "Running" as the start time.
-                     }
-            
-            #
-            # putting it all together...
-            #
-            
-            dictpack = {'datatype': 'CMASI/SessionStatus', \
-                        'datastring': str(dictadd) \
-                       }
-            
-            return dictpack
-
-
-class pack_AirVehicleState(object):
+#class pack_AirVehicleState(object):
+def pack_AirVehicleState(dictdatalist):
     """
     Gazebo I/O: http://gazebosim.org/tutorials?tut=ros_comm
     ---
@@ -240,167 +325,154 @@ class pack_AirVehicleState(object):
     })
     """
 
-    def __init__(self): # init everything
-        self.timescalled = 0
-        self.dict_clock = None
-        self.dict_odom = None
-        self.dict_imu = None
-        self.dict_curwaypt = None
+#    def __init__(self): # init everything
+#        self.timescalled = 0
+#        self.dict_clock = None
+#        self.dict_odom = None
+#        self.dict_imu = None
+#        self.dict_curwaypt = None
         
-    def pack(self, dictdatalist): # will use most recent data (if given None, will use last data we have
-        numNones = 0
-        holddictdatalist = [self.dict_clock, self.dict_odom, self.dict_imu, self.dict_curwaypt]
-        for i in range(len(dictdatalist)):
-            if not (dictdatalist[i] is None): # get have new data, should save and use that
-                holddictdatalist[i] = dictdatalist[i]
-            if holddictdatalist[i] is None:
-                numNones = numNones + 1
+#    def pack(self, dictdatalist): # will use most recent data (if given None, will use last data we have
+    numNones = 0
+    #holddictdatalist = [self.dict_clock, self.dict_odom, self.dict_imu, self.dict_curwaypt]
+    for i in range(len(dictdatalist)):
+        #if not (dictdatalist[i] is None): # get have new data, should save and use that
+        #    holddictdatalist[i] = dictdatalist[i]
+        #if holddictdatalist[i] is None:
+        if dictdatalist[i] is None:
+            numNones = numNones + 1
+    
+    if numNones > 0: # this should only happen on the first few calls if not given the dicts first
+        print("WARNING: pack_AirVehicleState() doesn't have enough data to build struct, skipping send...")
+        return None
+    else: # we have enough data to give back a packaged JSON dict for sending!
+        #[self.dict_clock, self.dict_odom, self.dict_imu, self.dict_curwaypt] = holddictdatalist
+        [dict_clock, dict_odom, dict_imu, dict_curwaypt] = dictdatalist
         
-        if numNones > 0: # this should only happen on the first few calls if not given the dicts first
-            print("WARNING: " + type(self) + " doesn't have enough data to build struct, skipping send...")
-            return None
-        else: # we have enough data to give back a packaged JSON dict for sending!
-            [self.dict_clock, self.dict_odom, self.dict_imu, self.dict_curwaypt] = holddictdatalist
-            
-            self.timescalled = self.timescalled + 1
+        #timescalled = timescalled + 1
 
-            time_in_msecs = self.dict_clock['clock']['secs']*1000 + int(self.dict_clock['clock']['nsecs']/1000000)
+        time_in_msecs = self.dict_clock['clock']['secs']*1000 + int(self.dict_clock['clock']['nsecs']/1000000)
 
-            #
-            # bodyframe of turtlebot is x out front/"nose", y out left (so use -y for "positive out right wing"), z up (so use -z for "positive downward")
-            #
-            
-            # linear velocity
-            u = dict_odom['twist']['twist']['linear']['x']
-            v = -dict_odom['twist']['twist']['linear']['y']
-            w = -dict_odom['twist']['twist']['linear']['z']
-            ground_speed = math.sqrt(u*u + v*v) # speed in x-y "ground"plane :)
-            air_speed = math.sqrt(u*u + v*v + w*w) # speed (magnitude) in 3D space
+        #
+        # bodyframe of turtlebot is x out front/"nose", y out left (so use -y for "positive out right wing"), z up (so use -z for "positive downward")
+        #
+        
+        # linear velocity
+        u = dict_odom['twist']['twist']['linear']['x']
+        v = -dict_odom['twist']['twist']['linear']['y']
+        w = -dict_odom['twist']['twist']['linear']['z']
+        ground_speed = math.sqrt(u*u + v*v) # speed in x-y "ground"plane :)
+        air_speed = math.sqrt(u*u + v*v + w*w) # speed (magnitude) in 3D space
 
-            # angular velocity
-            p = dict_odom['twist']['twist']['angular']['x']
-            q = -dict_odom['twist']['twist']['angular']['y']
-            r = -dict_odom['twist']['twist']['angular']['z']
-            
-            udot = self.dict_imu['linear_acceleration']['x']
-            vdot = -self.dict_imu['linear_acceleration']['y']
-            wdot = -self.dict_imu['linear_acceleration']['z']
-            #p = math.degrees(self.dict_imu['angular_velocity']['x'])
-            #q = math.degrees(-self.dict_imu['angular_velocity']['y'])
-            #r = math.degrees(-self.dict_imu['angular_velocity']['z'])
-            
-            qx = self.dict_imu['orientation']['x'] # gives quaternion
-            qy = self.dict_imu['orientation']['y'] # gives quaternion
-            qz = self.dict_imu['orientation']['z'] # gives quaternion
-            qw = self.dict_imu['orientation']['w'] # gives quaternion
-            # the ROS way...
-            #import tf
-            #(r,p,y)=tf.transformations.euler_from_quaternion([x,y,z,w],axes='szyx')
-            # the UxAS way...
-            # UxAS uses Psi-Theta_Phi Euler angles (z-y-x / heading-attitude-bank / yaw-pitch-roll), tangential-plane attitude
-            # (for more info on Tait-Bryan angles representation, see: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles)
-            import math
-            roll_bank_x = math.degrees(math.atan2( 2*(qw*qx + qy*qz) , 1-2*(qx*qx + qy*qy) ))
-            pitch_attitude_y = math.degrees(math.asin( bound(2*(qw*qy - qz*qx),[-1,1]) )) # cut this off at both ends, just in case of computation error
-            heading_yaw_z = math.degrees(math.atan2( 2*(qw*qz + qx*qy) , 1-2*(qy*qy + qz*qz) ))
+        # angular velocity
+        p = dict_odom['twist']['twist']['angular']['x']
+        q = -dict_odom['twist']['twist']['angular']['y']
+        r = -dict_odom['twist']['twist']['angular']['z']
+        
+        udot = dict_imu['linear_acceleration']['x']
+        vdot = -dict_imu['linear_acceleration']['y']
+        wdot = -dict_imu['linear_acceleration']['z']
+        #p = math.degrees(dict_imu['angular_velocity']['x'])
+        #q = math.degrees(-dict_imu['angular_velocity']['y'])
+        #r = math.degrees(-dict_imu['angular_velocity']['z'])
+        
+        qx = dict_imu['orientation']['x'] # gives quaternion
+        qy = dict_imu['orientation']['y'] # gives quaternion
+        qz = dict_imu['orientation']['z'] # gives quaternion
+        qw = dict_imu['orientation']['w'] # gives quaternion
+        # the ROS way...
+        #import tf
+        #(r,p,y)=tf.transformations.euler_from_quaternion([x,y,z,w],axes='szyx')
+        # the UxAS way...
+        # UxAS uses Psi-Theta_Phi Euler angles (z-y-x / heading-attitude-bank / yaw-pitch-roll), tangential-plane attitude
+        # (for more info on Tait-Bryan angles representation, see: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles)
+        import math
+        roll_bank_x = math.degrees(math.atan2( 2*(qw*qx + qy*qz) , 1-2*(qx*qx + qy*qy) ))
+        pitch_attitude_y = math.degrees(math.asin( bound(2*(qw*qy - qz*qx),[-1,1]) )) # cut this off at both ends, just in case of computation error
+        heading_yaw_z = math.degrees(math.atan2( 2*(qw*qz + qx*qy) , 1-2*(qy*qy + qz*qz) ))
 
-            #
-            # getting Location3D point created...
-            #
+        #
+        # getting Location3D point created...
+        #
 
-            # *** this Lat-Long-Alt comes from line 168-170 of examples/02_Example_WaterwaySearch/Scenario_WaterwaySearch.xml ***
-            # vehicleID is 400 (not 500)
-            #
-            # current waypoint ID, Altitude, AltitudeType, etc.
-            curwayptID = self.dict_curwaypt['WaypointID']
-            #curwayptAltitude = self.dict_curwaypt['Altitude']
-            #curwayptAltitudeType = self.dict_curwaypt['AltitudeType']
-            ## ...maybe make this a RosParam call instead of part of the curwaypt, since is static for each run?
-            #curwayptLatStart = self.dict_curwaypt['LatStart'] # (saved) beginning starting position, use as offset for (x,y)!
-            #curwayptLongStart = self.dict_curwaypt['LongStart'] # (saved) beginning starting position, use as offset for (x,y)!
-            curwayptVehicleID = 400
-            curwayptAltitude = 700
-            curwayptAltitudeType = 1 # MSL
-            # ...maybe make this a RosParam call instead of part of the curwaypt, since is static for each run?
-            curwayptLatStart = 45.3171 # (saved) beginning starting position, use as offset for (x,y)!
-            curwayptLongStart = -120.9923 # (saved) beginning starting position, use as offset for (x,y)!
+        # *** this Lat-Long-Alt comes from line 168-170 of examples/02_Example_WaterwaySearch/Scenario_WaterwaySearch.xml ***
+        # vehicleID is 400 (not 500)
+        #
+        # current waypoint ID, Altitude, AltitudeType, etc.
+        #curwayptID = dict_curwaypt['WaypointID']
+        curwayptID = dict_curwaypt['data'] # std_msgs/Int64
+        #curwayptAltitude = self.dict_curwaypt['Altitude']
+        #curwayptAltitudeType = self.dict_curwaypt['AltitudeType']
+        ## ...maybe make this a RosParam call instead of part of the curwaypt, since is static for each run?
+        #curwayptLatStart = self.dict_curwaypt['LatStart'] # (saved) beginning starting position, use as offset for (x,y)!
+        #curwayptLongStart = self.dict_curwaypt['LongStart'] # (saved) beginning starting position, use as offset for (x,y)!
+        curwayptVehicleID = 400
+        curwayptAltitude = 700
+        curwayptAltitudeType = 1 # MSL
+        # ...maybe make this a RosParam call instead of part of the curwaypt, since is static for each run?
+        curwayptLatStart = 45.3171 # (saved) beginning starting position, use as offset for (x,y)!
+        curwayptLongStart = -120.9923 # (saved) beginning starting position, use as offset for (x,y)!
 
-            x = self.dict_odom['pose']['pose']['position']['x'] # meters
-            y = self.dict_odom['pose']['pose']['position']['y'] # meters
-            z = self.dict_odom['pose']['pose']['position']['z'] # meters
-            #qx = dict_odom['pose']['pose']['orientation']['x']
-            #qy = dict_odom['pose']['pose']['orientation']['y']
-            #qz = dict_odom['pose']['pose']['orientation']['z']
-            #qw = dict_odom['pose']['pose']['orientation']['w']
-            
-            # sudo apt install ros-kinetic-geodesy # also installs python-pyproj... need to find a non-ROS-kinetic library for this (python-pyproj direct?)
-            import geodesy # technically doesn't include ROS nodes, though is a ROS package apparently???
-            import geodesy.utm
-            # geographic_msgs/GeoPoint (lat-long-alt in deg.meters) <-> WGS84 x-y-z format
-            #utm_pt = geodesy.utm.fromLatLong(latitude,longitude,curwayptAltitude)
-            #x = utm_pt.northing
-            #y = -utm_pt.easting
-            #z = utm_pt.altitude
-            utm_pt = geodesy.utm.fromLatLong(curwayptLatStart,curwayptLongStart,curwayptAltitude)
-            xoffset = utm_pt.northing
-            yoffset = -utm_pt.easting
-            #zoffset = utm_pt.altitude
-            utm_pt_with_offset = geodesy.utm.UTMPoint(-y + yoffset, x + xoffset, curwayptAltitude, utm_pt.zone, utm_pt.band) # as: (easting, northing, altitude, zone, band)
-            wgs84_pt = utm_pt_with_offset.toMsg() # gives back a geographic_msgs/GeoPoint (putting it back in lat-long-alt format again)
-            latitude = wgs84_pt.latitude + curwayptLatStart
-            longitude = wgs84_pt.longitude + curwayptLatStart
-            # cheating on Altitude and AltitudeType here, is going to be "looping around"/reusing from received MissionCommand data...
-            dictloc3d = {'Latitude': latitude, # units: degree
-                         'Altitude': curwayptAltitude, # units: meter
-                         'AltitudeType': curwayptAltitudeType, # default: 1(=MSL) # 0(=AGL) Height above ground/survace level, 1(=MSL) Height above WGS84 ellipsoid, mean sea level
-                         'Longitude': longitude # units: degree
-                        }
-            
-            #
-            # putting it all together
-            #
-            
-            dictadd = {'ID': vehicleID,
-                       'u': u, # units: meter/sec # Velocity in the body x-direction (postive out nose)
-                       'v': v, # units: meter/sec # Velocity in the body y-direction (positive out right wing)
-                       'w': w, # units: meter/sec # Velocity in the body z-direction (positve downward)
-                       'udot': udot, # units: meter/sec/sec # Acceleration in the body x-direction (postive out nose)
-                       'vdot': vdot, # units: meter/sec/sec # Acceleration in the body y-direction (positive out right wing)
-                       'wdot': wdot, # units: meter/sec/sec # Acceleration in the body z-direction (positve downward)
-                       'Heading': heading_yaw_z, # units: degree # Angle between true North and the projection of the body x-axis in the North-East plane.
-                       'Pitch': pitch_attitude_y, # units: degree # Pitch of vehicle around body y-axis (positive upwards)
-                       'Roll': roll_bank_x, # units: degree # Roll angle of the vehicle around body x-axis (positive right wing down)
-                       'p': p, # units: degree/sec # roll-rate of vehicle (angular velocity around body x-axis). Positive right-wing down.
-                       'q': q, # units: degree/sec # pitch rate of the vehicle (angular velocity around body y-axis). Positive nose-up.
-                       'r': r, # units: degree/sec # yaw rate of the vehicle (angular velocity around body z-axis). Positive nose right.
-                       'Course': heading_yaw_z, # units: degrees # Course/Groundtrack angle of the entity referenced to true North
-                       'Groundspeed': ground_speed, # units: m/s
-                       'Location': {'datatype': 'CMASI/Location3D', 'datastring': str(dictloc3d)},
-                       'EnergyAvailable': 100.00,
-                       'ActualEnergyRate': 0.00027799999225,
-                       'PayloadStateList': [], # for now...
-                       'CurrentWaypoint': curwayptID, # int64 # The ID of the current waypoint. Only valid if the vehicle is in waypoint following mode. (starts at 0)
-                       'CurrentCommand': 0, # int64 (23 if Mode=1?)
-                       'Mode': 0, # Waypoint=0, Loiter=1, FlightDirector=2, TargetTrack=3, FollowLeader=4, LostComm=5
-                       # Tasks that this entity is currently executing. An empty list indicates no associated tasks. The task number should coincide with the task number in the task request. For instance, if a waypoint is associated with a search task, then the task number associated with that search should be included in this list.
-                       'AssociatedTasks': [], # integer values
-                       'Time': time_in_msecs, # integer, timestamp of data, units: millisecond since 1 Jan 1970 # should match "afrl.cmasi.SessionStatus' 'ScenarioTime' message that is sent just prior to this
-                       'Info': [],
-                       'Airspeed': air_speed, # true airspeed, meter/sec
-                       'VerticalSpeed': 0.0,
-                       'WindSpeed': 0.0,
-                       'WindDirection': 0.0
-                      }
-            
-            dictpack = {'datatype': 'CMASI/AirVehicleState',
-                        'datastring': str(dictadd)
-                       }
-            
-            return dictpack
+        x = dict_odom['pose']['pose']['position']['x'] # meters
+        y = dict_odom['pose']['pose']['position']['y'] # meters
+        z = dict_odom['pose']['pose']['position']['z'] # meters
+        #qx = dict_odom['pose']['pose']['orientation']['x']
+        #qy = dict_odom['pose']['pose']['orientation']['y']
+        #qz = dict_odom['pose']['pose']['orientation']['z']
+        #qw = dict_odom['pose']['pose']['orientation']['w']
+        
+        [latitude,longitude,altitude] = convertXYAlttoLatLongAlt([curwayptLatStart,curwayptLongStart,curwayptAltitude],x,y,z)
+        # cheating on Altitude and AltitudeType here, is going to be "looping around"/reusing from received MissionCommand data...
+        dictloc3d = {'Latitude': latitude, # units: degree
+                     'Altitude': curwayptAltitude, # units: meter
+                     'AltitudeType': curwayptAltitudeType, # default: 1(=MSL) # 0(=AGL) Height above ground/survace level, 1(=MSL) Height above WGS84 ellipsoid, mean sea level
+                     'Longitude': longitude # units: degree
+                    }
+        
+        #
+        # putting it all together
+        #
+        
+        dictadd = {'ID': vehicleID,
+                   'u': u, # units: meter/sec # Velocity in the body x-direction (postive out nose)
+                   'v': v, # units: meter/sec # Velocity in the body y-direction (positive out right wing)
+                   'w': w, # units: meter/sec # Velocity in the body z-direction (positve downward)
+                   'udot': udot, # units: meter/sec/sec # Acceleration in the body x-direction (postive out nose)
+                   'vdot': vdot, # units: meter/sec/sec # Acceleration in the body y-direction (positive out right wing)
+                   'wdot': wdot, # units: meter/sec/sec # Acceleration in the body z-direction (positve downward)
+                   'Heading': heading_yaw_z, # units: degree # Angle between true North and the projection of the body x-axis in the North-East plane.
+                   'Pitch': pitch_attitude_y, # units: degree # Pitch of vehicle around body y-axis (positive upwards)
+                   'Roll': roll_bank_x, # units: degree # Roll angle of the vehicle around body x-axis (positive right wing down)
+                   'p': p, # units: degree/sec # roll-rate of vehicle (angular velocity around body x-axis). Positive right-wing down.
+                   'q': q, # units: degree/sec # pitch rate of the vehicle (angular velocity around body y-axis). Positive nose-up.
+                   'r': r, # units: degree/sec # yaw rate of the vehicle (angular velocity around body z-axis). Positive nose right.
+                   'Course': heading_yaw_z, # units: degrees # Course/Groundtrack angle of the entity referenced to true North
+                   'Groundspeed': ground_speed, # units: m/s
+                   'Location': {'datatype': 'CMASI/Location3D', 'datastring': str(dictloc3d)},
+                   'EnergyAvailable': 100.00,
+                   'ActualEnergyRate': 0.00027799999225,
+                   'PayloadStateList': [], # for now...
+                   'CurrentWaypoint': curwayptID, # int64 # The ID of the current waypoint. Only valid if the vehicle is in waypoint following mode. (starts at 0)
+                   'CurrentCommand': 0, # int64 (23 if Mode=1?)
+                   'Mode': 0, # Waypoint=0, Loiter=1, FlightDirector=2, TargetTrack=3, FollowLeader=4, LostComm=5
+                   # Tasks that this entity is currently executing. An empty list indicates no associated tasks. The task number should coincide with the task number in the task request. For instance, if a waypoint is associated with a search task, then the task number associated with that search should be included in this list.
+                   'AssociatedTasks': [], # integer values
+                   'Time': time_in_msecs, # integer, timestamp of data, units: millisecond since 1 Jan 1970 # should match "afrl.cmasi.SessionStatus' 'ScenarioTime' message that is sent just prior to this
+                   'Info': [],
+                   'Airspeed': air_speed, # true airspeed, meter/sec
+                   'VerticalSpeed': 0.0,
+                   'WindSpeed': 0.0,
+                   'WindDirection': 0.0
+                  }
+        
+        dictpack = {'datatype': 'CMASI/AirVehicleState',
+                    'datastring': str(dictadd)
+                   }
+        
+        return dictpack
 
-
-
-class unpack_MissionCommand(object):
+#class unpack_MissionCommand(object):
+def repack_MissionCommand(dictdatalist):
     """
     {
      \'Status\': 1,
@@ -416,60 +488,109 @@ class unpack_MissionCommand(object):
      \'CommandID\': 119
     }
     """
-    def __init__():
-         # init everything
-        self.timescalled = 0
-        self.dict_clock = None
-        self.dict_odom = None
-        self.dict_imu = None
-        self.dict_curwaypt = None
+#    def __init__():
+#         # init everything
+#        self.timescalled = 0
+#        self.dict_clock = None
+#        self.dict_odom = None
+#        self.dict_imu = None
+#        self.dict_curwaypt = None
         
-    def unpack(self, dictdatalist): # will use most recent data (if given None, will use last data we have
-        numNones = 0
-        holddictdatalist = [self.dict_MC]
-        for i in range(len(dictdatalist)):
-            if not (dictdatalist[i] is None): # get have new data, should save and use that
-                holddictdatalist[i] = dictdatalist[i]
-            if holddictdatalist[i] is None:
-                numNones = numNones + 1
+#    def unpack(self, dictdatalist): # will use most recent data (if given None, will use last data we have
+    numNones = 0
+    #holddictdatalist = [self.dict_MC]
+    for i in range(len(dictdatalist)):
+    #    if not (dictdatalist[i] is None): # get have new data, should save and use that
+    #        holddictdatalist[i] = dictdatalist[i]
+        #if holddictdatalist[i] is None:
+        if dictdatalist[i] is None:
+            numNones = numNones + 1
+    
+    if numNones > 0: # this should only happen on the first few calls if not given the dicts first
+        print("WARNING: repack_MissionCommand() doesn't have enough data to build struct, skipping send...")
+        return None
+    else: # we have enough data to give back a packaged JSON dict for sending!
+        [dict_MC] = dictdatalist
         
-        if numNones > 0: # this should only happen on the first few calls if not given the dicts first
-            print("WARNING: " + type(self) + " doesn't have enough data to build struct, skipping send...")
-            return None
-        else: # we have enough data to give back a packaged JSON dict for sending!
-            [self.dict_MC] = holddictdatalist
+        #timescalled = timescalled + 1
+
+        if dict_MC['datatype'] == 'CMASI/MissionCommand' and dict_MC['datastring']['VehicleID'] == 400: # then we've got the right sort of message to unpack, and for the right vehicle even! :)
+            topdata = ast.literal_eval(dict_MC['datastring']) # get first chunk of dictionary out to mess with
             
-            self.timescalled = self.timescalled + 1
-
-            if dict_MC['datatype'] == 'CMASI/MissionCommand' and dict_MC['datastring']['VehicleID'] == 400: # then we've got the right sort of message to unpack, and for the right vehicle even! :)
-                topdata = ast.literal_eval(dict_MC['datastring']) # get first chunk of dictionary out to mess with
-                
-                keys = ['Status','VehicleActionList','VehicleID']
-                expected = [1, [], 400]
-                for key,exp in zip(keys,expected):
-                    if topdata[key] != exp: # unexpected
-                        print("WARNING: " + key + " is %r, should be %r." % (topdata[key],exp))
+            keys = ['Status','VehicleActionList','VehicleID']
+            expected = [1, [], 400]
+            for key,exp in zip(keys,expected):
+                if topdata[key] != exp: # unexpected
+                    print("WARNING: " + key + " is %r, should be %r." % (topdata[key],exp))
                     
+            theFirstWaypoint = topdata['FirstWaypoint']
+            theCommandID = topdata['CommandID']
+            grabWaypoints = []
+            for wayptdict in topdata['WaypointList']:
+                if wayptdict['datatype'] != 'CMASI/Waypoint':
+                    print("ERROR: expecting 'CMASI/Waypoint' from MissionCommand, got: '%s'" % wayptdict['datatype'])
+                else: # we got the data in a format we know how to deal with!
+                    wayptdata = ast.literal_eval(wayptdict['datastring']) # get waypt dictionary out to mess with
+                    grabWaypoints.append(wayptdata)
+            
+            sortWaypoints = []
+            curwayptnum = theFirstWaypoint
+            prevwaypt = None
+            for i in range(len(grabWaypoints)): # going to potentially loop over every waypoint in the list, unless the connection between them is broken somehow? (bad)
+                found = 0
+                for j in range(len(grabWaypoints)): # search over entire list for "correct" waypoint
+                    if grabWaypoints[j]['Number'] == curwayptnum: # found the current waypoint!
+                        sortWaypoints.append(grabWaypoints[j])
+                        prevwaypt = curwaypt
+                        curwaypt = grabWaypoints[j]['NextWaypoint']
+                        found = 1
+                        break
+                if (found == 0):
+                    print("DEBUG: at end of list? breaking out of outer loop.")
+                    break
 
+            # send altitude, longitude, latitude in the ordered list (and allow overwrites when new command IDs are given from UxAS? or should we send waypt num.s and append?
+            
+            # geometry_msgs/PoseArray:
+            poseslist = []
+            for i in range(len(sortWaypoints)):
+                [x,y,alt] = convertLatLongAlttoXYAlt(sortWaypoints[i]['Latitude'],sortWaypoints[i]['Longitude'],sortWaypoints[i]['Altitude'])
+                poseslist.append(pack_pose([[x,y],1])) # gives position - orientation packaging, type 1 is [x,y] only
+            dictpack = {'header': rC.json_header(t=0,frame_id=str(sortWaypoints[i]['Number'])), 'poses': poseslist} # frame_id is being used to store the 'Number' of the waypt
 
+            # nav_msgs/Path:
+            #poseslist = []
+            #for i in range(len(sortWaypoints)):
+            #    [x,y,alt] = convertLatLongAlttoXYAlt(sortWaypoints[i]['Latitude'],sortWaypoints[i]['Longitude'],sortWaypoints[i]['Altitude'])
+            #    poseslist.append({'header': wsG.json_header(t=0,frame_id=str(sortWaypoints[i]['Number']), 'pose': pack_pose([[x,y],1])}) # gives position - orientation packaging, type 1 is [x,y] only # frame_id is being used to store the 'Number' of the waypt
+            #dictpack = {'header': wsG.json_header(t=0), 'poses': poseslist}
+            
+            return dictpack
 
-            else:
-                pass
-        
-        
-    
-    
-    
-    
-        return None # *** REQUIRES FIXING ***
+        else:
+            return None
 
 
 def unpack_dictmsg_out_of_msg(dictmsg):
     return dictmsg['msg']
 
-
 def pack_already_jsonmsg(jsonmsg):
     return jsonmsg
+    
+#def overwrite_incoming_data_only_if_new(dictdatalist,olddatalist):
+#    if len(dictdatalist) != len(olddatalist):
+#        print("ERROR: newlist not same length as oldlist. Exiting...")
+#        sys.exit(0)
+#    else:
+#        numNones = 0
+#        holddictdatalist = list(olddatalist)
+#        for i in range(len(dictdatalist)):
+#            if not (dictdatalist[i] is None): # get have new data, should save and use that
+#                holddictdatalist[i] = dictdatalist[i]
+#            if holddictdatalist[i] is None:
+#                numNones = numNones + 1
+#    return [numNones, holddictdatalist]
+
 
 if __name__ == '__main__':
     
@@ -495,7 +616,7 @@ if __name__ == '__main__':
 
     #                       'LmcpGen topic/datatype name': [['ROS topic','ROS datatype',ROS un/re/packer function(s)/classes], [.,.,.], ...] , ...
     dict_lmcptypes_toros = {'afrl.cmasi.MissionCommand': [ ['/from_uxas/MissionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
-                                                           #['/from_uxas/waypointlist', 'geometry_msgs/PoseArray', None] ],
+                                                           #['/from_uxas/MissionCommand/waypointlist', 'geometry_msgs/PoseArray', repack_MissionCommand] ],
                             'afrl.cmasi.LineSearchTask': [ ['/from_uxas/LineSearchTask', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
                             'afrl.cmasi.VehicleActionCommand': [ ['/from_uxas/VehicleActionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ]
                            }
@@ -503,34 +624,30 @@ if __name__ == '__main__':
     order_lmcptypes_toros = ['afrl.cmasi.MissionCommand','afrl.cmasi.LineSearchTask','afrl.cmasi.VehicleActionCommand']
 
 
-    
+    #
+    # for connection to turtlebot:
+    #
 
-
-
-    """
     #                         'LmcpGen topic/datatype name': [ [['ROS topic','ROS datatype'],[.,.], ...], ROS un/re/packer function/class]
     dict_lmcptypes_fromros = {'afrl.cmasi.AirVehicleState': [ [['/clock','rosgraph_msgs/Clock'],
                                                                ['/odom','nav_msgs/Odometry'],
                                                                ['/mobile_base/sensors/imu_data','sensor_msgs/Imu'],
-                                                               ['/curwaypt','uxas_required_msgs/onewaypt']],
-                                                              pack_AirVehicleState() ],
+                                                               #['/curwaypt','uxas_required_msgs/onewaypt']],
+                                                               ['/curwaypt','std_msgs/Int64']],
+                                                              pack_AirVehicleState ],
                               'afrl.cmasi.SessionStatus': [ [['/clock','rosgraph_msgs/Clock']],
-                                                            pack_SessionStatus() ]
+                                                            pack_SessionStatus ]
                              }
 
     order_lmcptypes_fromros = ['afrl.cmasi.SessionStatus', 'afrl.cmasi.AirVehicleState']
-    """
-
-
+    #holddata_lmcptypes_fromros = []
+    #for lmcptype in order_lmcptypes_fromros:
+    #    holddata_lmcptypes_fromros.append([None]*len(dict_lmcptypes_fromros[lmcptype][0])) # make a list of holder chunks for the number of channels for each lmcptypes_from_ros
+    rosdictInhold = {}
     
-
-
-
-
-
-
-
-
+    #
+    # set up ROS publishers for translation from Lmcp-to-ROS
+    #
 
     #connection = "ws://localhost:9090/" # example string for connecting to rosbridge_server
     connection = gC.getConnectionIPaddress(3) # this should give back: "ws://localhost:9090/"
@@ -551,19 +668,34 @@ if __name__ == '__main__':
                 #datatypename = (holdsplit[-2]).lower() + '_msg/' + holdsplit[-1]
                 # rC.RosMsg(connectlib, connection, pubsub, topicname, datatypename, un_pack_function=None)
                 wshold = rC.RosMsg('ws4py', connection, 'pub', topicname, datatypename, pack_already_jsonmsg)
-                ws_pubdict.update( {topicname: wshold} ) # add this to list
+                ws_pubdict.update( {topicname: wshold} ) # add this to list # dictionaries and classes are mutable, so we should be okay?
                 ws_publist.append(topicname)
     
+    #
+    # set up ROS subscribers for translation from ROS-to-Lmcp
+    #    
+    
+    # set up ROS subscribers:
+    ws_subdict = {} # will hold all subscriber class objects, keyed to their topicname
+    ws_sublist = [] # will hold all 'topicname's
+    for key in order_lmcptypes_fromros:
+        for i in range(len(dict_lmcptypes_fromros[key][0])):
+            [topicname,datatypename] = dict_lmcptypes_fromros[key][0][i]
+            if topicname in ws_subdict.keys():
+                print("DEBUG: warning, topicname '%s' for key '%s' already in dict_lmcptypes_fromros!" % (topicname,key))
+                print("DEBUG: shouldn't double-up on subscribing topicnames, skipping 'resubscription'...")
+                #sys.exit(1)
+            else:
+                # if we were explicitly giving the same topicname to this as the OpenUxAS channel...
+                #holdsplit = topicname.split('.')
+                #datatypename = (holdsplit[-2]).lower() + '_msg/' + holdsplit[-1]
+                # rC.RosMsg(connectlib, connection, pubsub, topicname, datatypename, un_pack_function=None)
+                wshold = rC.RosMsg('ws4py', connection, 'sub', topicname, datatypename, unpack_dictmsg_out_of_msg)
+                ws_subdict.update( {topicname: wshold} ) # add this to list # dictionaries and classes are mutable, so we should be okay?
+                ws_sublist.append(topicname)
+                rosdictInhold.update({ topicname: None }) # also initialize the stuff with 'None' to begin with
     
     """
-    # set up ROS subscribers:
-    ws_sublist = []
-    
-    
-    
-    
-    
-    
     # to "read" something here, try at the commandline before running this program: `rostopic pub /robot0/runtype std_msgs/Int8 "data: 12" -l`
     ws = RosMsg('ws4py', connection, 'sub', '/robot0/runtype', 'std_msgs/Int8', ws4pyROS.unpack_runtype)
     # retrieves data if it exists, None if no receipt since last call
@@ -593,11 +725,6 @@ if __name__ == '__main__':
     print("cmdvelcmd sent!\n%r" % cmdvelcmd)
     """
     
-    
-    
-    
-    
-
     # main loop: receive a message, then process it
     while True:
         print("--------------------------------------------")
@@ -615,10 +742,10 @@ if __name__ == '__main__':
         if (int(entityid) == 0 and int(serviceid) == 0) or obj.FULL_LMCP_TYPE_NAME == "uxas.messages.uxnative.CreateNewService":
             continue
         
-        lmcp_found = 0
+        #lmcp_found = 0
         for full_lmcp_type_namestr in order_lmcptypes_toros: # only "afrl.cmasi.MissionCommand" for now...
             if obj.FULL_LMCP_TYPE_NAME == full_lmcp_type_namestr: # then we found it / the match!
-                lmcp_found = 1
+                #lmcp_found = 1
                 # do stuff
                 
                 print("Received: " + obj.FULL_LMCP_TYPE_NAME)
@@ -632,47 +759,54 @@ if __name__ == '__main__':
                 for i in range(len(dict_lmcptypes_toros[key])):
                     [topicname,datatypename,un_pack_function] = dict_lmcptypes_toros[key][i]
                     wshold = ws_pubdict[topicname] # get the correct ws publisher
-                    wshold.send(d)
+                    wshold.send(d) # send the data using the correct ws publisher
                 
                 break # only one match per obj(ect), duh, so stop here :)
                 
-        if lmcp_found == 1:
-            pass
+        #
+        # attempt to read ROS data across all open channels, store updated info, pack for each to-UxAS object, and send along to UxAS
+        #
         
-        
-
-
-            
-
-
-        """
+        # rosdictInhold is set as {} once very far up, will hold most recent data received from the ROS-side channels always
         for lmcptype in order_lmcptypes_fromros: # for each lmcptype we're supposed to send, get updated data from all ROS topics required for send
             # requires that ROS topics be set up first...
-            for rostopicname,rostypename in zip(dict_lmcptypes_fromros[lmcptype][0]):
+            for i in range(len(dict_lmcptypes_fromros[lmcptype][0])):
+                [rostopicname,rostypename] = dict_lmcptypes_fromros[lmcptype][0][i]
                 dicthold = ws_subdict[rostopicname].receive()
                 if not (dicthold is None): # we got new data :)
-                    rosdictInhold.update({ rostopicname: dicthold })
+                    rosdictInhold.update({ rostopicname: dicthold }) # most recent data received by topicname
 
+        # take data from ROS and send
         tosendtoUxAS = {}
-        for lmcptype in order_lmcptypes_fromros: # for each lmcptype we're supposed to send, give updated data and get new jsondict to send
+        for lmcptype in order_lmcptypes_fromros: # for each lmcptype we're supposed to send, put together necessary data in a list and pack into format needed
+            # get the data packed into sections that are needed for each UxAS object
             dictdatalist = []
-            # requires that ROS topics be queried for data first...
-            for rostopicname,rostypename in zip(dict_lmcptypes_fromros[lmcptype][0]):
-                dictdatalist.append(rosdictInhold[rostopicname])
-            jsondicthold = dict_lmcptypes_fromros[lmcptype][1].pack(dictdatalist) # expected-input in order in which listed in dict_lmcptypes_fromros
-            tosendtoUxAS.update( {lmcptype: jsondicthold} )
-
-        
-        for lmcptype in order_lmcptypes_fromros: # for each lmcptype we're supposed to send, give updated data and get new jsondict to send
-            jsondicthold = tosendtoUxAS[lmcptype]
+            # requires that ROS topics have been queried for data first...
+            for i in range(len(dict_lmcptypes_fromros[lmcptype][0])):
+                [rostopicname,rostypename] = dict_lmcptypes_fromros[lmcptype][0][i]
+                if rostopicname in rosdictInhold: # should have been built in from the start with at least a 'None' above
+                    dictdatalist.append(rosdictInhold[rostopicname])
+                else: # but if not, then set to None
+                    print("WARNING: rostopicname '%s' not in rosdictInhold. Setting data in dictdatalist for packaging to None." % rostopicname)
+                    dictdatalist.append(None)
+            jsondicthold = dict_lmcptypes_fromros[lmcptype][1](dictdatalist) # pack function call, expected-input in order in which listed in dict_lmcptypes_fromros
+#            tosendtoUxAS.update( {lmcptype: jsondicthold} )
+#        
+#        for lmcptype in order_lmcptypes_fromros: # for each lmcptype we're supposed to send, take updated data and get new jsondict to send
+#            jsondicthold = tosendtoUxAS[lmcptype]
+            
             # create UxAS obj from dictionary
             obj = factory.unpackFromDict(jsondicthold)
-            # syntax to send back to UxAS
-            header = str(obj.FULL_LMCP_TYPE_NAME) + "$lmcp|" + str(obj.FULL_LMCP_TYPE_NAME) + "||0|0$"
-            smsg = LMCPFactory.packMessage(obj, True)
-            socket_send.send(header + smsg)
-            print("  Sent:   " + obj.FULL_LMCP_TYPE_NAME)
-        """
+            # send object if object was created successfully (not give a None)
+            if obj is None:
+                print("WARNING: jsondicthold = '%s' did not create useful object for lmcptype '%s'. Skipping." % (str(jsondicthold),lmcptype))
+            else:
+                # syntax to send back to UxAS
+                header = str(obj.FULL_LMCP_TYPE_NAME) + "$lmcp|" + str(obj.FULL_LMCP_TYPE_NAME) + "||0|0$"
+                smsg = LMCPFactory.packMessage(obj, True)
+                socket_send.send(header + smsg)
+                print("  Sent:   " + obj.FULL_LMCP_TYPE_NAME)
+        
 
 
 
