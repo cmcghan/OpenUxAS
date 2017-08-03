@@ -67,7 +67,7 @@ FIRST_TIME=0
 if [ "$FORCE" == "-f" ]; then
     echo "Force switch active, removing UxAS subdirectories from $WORKSPACEDIR prior to build..."
     rm -rf $WORKSPACEDIR/OpenUxAS
-    rm -rf $WORKSPACEDIR/OpesAMASE
+    rm -rf $WORKSPACEDIR/OpenAMASE
     rm -rf $WORKSPACEDIR/LmcpGen
     FIRST_TIME=1
 fi
