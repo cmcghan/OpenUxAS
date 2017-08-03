@@ -54,9 +54,9 @@ else
     echo "Bad switch for DOWNLOAD_VS_COMPILE(=$DOWNLOAD_VS_COMPILE), exiting."
     exit -1
 fi
-echo "* https;//github.com/$REPO_SOURCE_OU/OpenUxAS , branch=$BRANCH"
-echo "* https;//github.com/$REPO_SOURCE_OA/OpenAMASE"
-echo "* https;//github.com/$REPO_SOURCE_LG/LmcpGen"
+echo "* https://github.com/$REPO_SOURCE_OU/OpenUxAS , branch=$BRANCH"
+echo "* https://github.com/$REPO_SOURCE_OA/OpenAMASE"
+echo "* https://github.com/$REPO_SOURCE_LG/LmcpGen"
 echo " "
 
 #
