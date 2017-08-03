@@ -556,7 +556,7 @@ def repack_MissionCommand(dictdatalist):
             for i in range(len(sortWaypoints)):
                 [x,y,alt] = convertLatLongAlttoXYAlt(sortWaypoints[i]['Latitude'],sortWaypoints[i]['Longitude'],sortWaypoints[i]['Altitude'])
                 poseslist.append(pack_pose([[x,y],1])) # gives position - orientation packaging, type 1 is [x,y] only
-            dictpack = {'header': rC.json_header(t=0,frame_id=str(sortWaypoints[i]['Number'])), 'poses': poseslist} # frame_id is being used to store the 'Number' of the waypt
+            dictpack = {'header': wsG.json_header(t=0,frame_id=str(sortWaypoints[i]['Number'])), 'poses': poseslist} # frame_id is being used to store the 'Number' of the waypt
 
             # nav_msgs/Path:
             #poseslist = []
@@ -595,6 +595,20 @@ def pack_already_jsonmsg(jsonmsg):
 if __name__ == '__main__':
     
     #
+    # get commandline arguments and select parameters for run
+    #
+    okargs = {'amase': ['test','test'], 'intertest': ['inter','inter'], 'turtlebot': ['tbot','tbot']}
+    
+    if (len(sys.argv) < 2) or not (sys.argv[1] in okargs.keys()): # need name of script and at least one argument
+        print("ERROR: no commandline argument given.")
+        print("Acceptable arguments are: %r" % okargs.keys())
+        sys.exit(0)
+    
+    # get the parameters associated with the arguments
+    [torosparam,fromrosparam] = okargs[sys.argv[1]]
+    
+    
+    #
     # set up initial connection to UxAS "party-line" so can read-in messages
     #
     
@@ -614,36 +628,67 @@ if __name__ == '__main__':
     socket_send = context.socket(zmq.PUSH)
     socket_send.connect("tcp://127.0.0.1:5561")
 
-    #                       'LmcpGen topic/datatype name': [['ROS topic','ROS datatype',ROS un/re/packer function(s)/classes], [.,.,.], ...] , ...
-    dict_lmcptypes_toros = {'afrl.cmasi.MissionCommand': [ ['/from_uxas/MissionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
-                                                           #['/from_uxas/MissionCommand/waypointlist', 'geometry_msgs/PoseArray', repack_MissionCommand] ],
-                            'afrl.cmasi.LineSearchTask': [ ['/from_uxas/LineSearchTask', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
-                            'afrl.cmasi.VehicleActionCommand': [ ['/from_uxas/VehicleActionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ]
-                           }
-                            
+    if torosparam == 'test':
+        #                       'LmcpGen topic/datatype name': [['ROS topic','ROS datatype',ROS un/re/packer function(s)/classes], [.,.,.], ...] , ...
+        dict_lmcptypes_toros = {'afrl.cmasi.MissionCommand': [ ['/from_uxas/MissionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
+                                'afrl.cmasi.LineSearchTask': [ ['/from_uxas/LineSearchTask', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
+                                'afrl.cmasi.VehicleActionCommand': [ ['/from_uxas/VehicleActionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ]
+                               }
+
+    elif torosparam == 'inter':
+        #                       'LmcpGen topic/datatype name': [['ROS topic','ROS datatype',ROS un/re/packer function(s)/classes], [.,.,.], ...] , ...
+        dict_lmcptypes_toros = {'afrl.cmasi.MissionCommand': [ ['/from_uxas/MissionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg],
+                                                               ['/from_uxas/MissionCommand/waypointlist', 'geometry_msgs/PoseArray', repack_MissionCommand] ],
+                                                               #['/from_uxas/MissionCommand/waypointlist', 'nav_msgs/Path', repack_MissionCommand] ],
+                                'afrl.cmasi.LineSearchTask': [ ['/from_uxas/LineSearchTask', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
+                                'afrl.cmasi.VehicleActionCommand': [ ['/from_uxas/VehicleActionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ]
+                               }
+
+    elif torosparam == 'tbot':
+        #                       'LmcpGen topic/datatype name': [['ROS topic','ROS datatype',ROS un/re/packer function(s)/classes], [.,.,.], ...] , ...
+        dict_lmcptypes_toros = {'afrl.cmasi.MissionCommand': [ ['/from_uxas/MissionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg],
+                                                               ['/from_uxas/MissionCommand/waypointlist', 'geometry_msgs/PoseArray', repack_MissionCommand] ],
+                                'afrl.cmasi.LineSearchTask': [ ['/from_uxas/LineSearchTask', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ],
+                                'afrl.cmasi.VehicleActionCommand': [ ['/from_uxas/VehicleActionCommand', 'uxas_required_msgs/DatatypeDatastring', pack_already_jsonmsg] ]
+                               }
+
+    else: # should never get here
+        pass
+
     order_lmcptypes_toros = ['afrl.cmasi.MissionCommand','afrl.cmasi.LineSearchTask','afrl.cmasi.VehicleActionCommand']
+
 
 
     #
     # for connection to turtlebot:
     #
-
+    rosdictInhold = {}
     #                         'LmcpGen topic/datatype name': [ [['ROS topic','ROS datatype'],[.,.], ...], ROS un/re/packer function/class]
     dict_lmcptypes_fromros = {'afrl.cmasi.AirVehicleState': [ [['/clock','rosgraph_msgs/Clock'],
                                                                ['/odom','nav_msgs/Odometry'],
                                                                ['/mobile_base/sensors/imu_data','sensor_msgs/Imu'],
-                                                               #['/curwaypt','uxas_required_msgs/onewaypt']],
                                                                ['/curwaypt','std_msgs/Int64']],
+                                                               #['/curwaypt','uxas_required_msgs/onewaypt']],
                                                               pack_AirVehicleState ],
                               'afrl.cmasi.SessionStatus': [ [['/clock','rosgraph_msgs/Clock']],
                                                             pack_SessionStatus ]
                              }
 
-    order_lmcptypes_fromros = ['afrl.cmasi.SessionStatus', 'afrl.cmasi.AirVehicleState']
-    #holddata_lmcptypes_fromros = []
-    #for lmcptype in order_lmcptypes_fromros:
-    #    holddata_lmcptypes_fromros.append([None]*len(dict_lmcptypes_fromros[lmcptype][0])) # make a list of holder chunks for the number of channels for each lmcptypes_from_ros
-    rosdictInhold = {}
+    if fromrosparam == 'test':
+        dict_lmcptypes_fromros = {}
+        order_lmcptypes_fromros = []
+
+    elif fromrosparam == 'inter':
+        
+        order_lmcptypes_fromros = ['afrl.cmasi.SessionStatus', 'afrl.cmasi.AirVehicleState']
+
+    elif fromrosparam == 'tbot':
+        
+        order_lmcptypes_fromros = ['afrl.cmasi.SessionStatus', 'afrl.cmasi.AirVehicleState']
+
+    else: # should never get here
+        pass
+
     
     #
     # set up ROS publishers for translation from Lmcp-to-ROS
