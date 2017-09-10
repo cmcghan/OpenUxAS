@@ -103,7 +103,7 @@ For an Ubuntu 16.04 or Mac OS X system with the listed prerequisite tools instal
 
 The following is a bash script that helps to partially-automate the "installing prerequisite tools" processes that are documented in this README.md file below.
 
-This has been tested-working on Ubuntu 16.04, as of 2016-05-23.
+This has been tested-working on Ubuntu 16.04, as of 2017-05-23.
 
 1. Download the script from the [*OpenUxAS* repository](https://github.com/afrl-rq/OpenUxAS/) (install_most_deps.sh) OR `cd` to your `git clone`d *OpenUxAS* directory
 1. Run the script at the terminal: `./install_most_deps.sh`
@@ -235,7 +235,7 @@ Note that the most up-to-date instructions on the dependencies-needed for UxAS a
 
 The following is a bash script that helps to partially-automate the "configure UxAS and related projects" and "building at the command line" processes that are documented in this README.md file below.
 
-This has been tested-working on Ubuntu 16.04, as of 2016-05-23.
+This has been tested-working on Ubuntu 16.04, as of 2017-05-23.
 
 1. Download these two scripts from the [*OpenUxAS* repository](https://github.com/afrl-rq/OpenUxAS/) OR `cd` to your `git clone`d *OpenUxAS* directory
     - `checkout_plus_config.sh`
@@ -266,7 +266,7 @@ Expected file system layout:
                     /nbproject
                     /run
                     /src
-  LcmpGen
+  LmcpGen
           /dist
                LmcpGen.jar <-- add this here to avoid compilation
           /nbproject
@@ -440,7 +440,7 @@ unexpected trouble may arise on other platforms.
 
 The following is a bash script that helps to partially-automate the "building the documentation" processes that are documented in this README.md file below.
 
-This has been tested-working on Ubuntu 16.04, as of 2016-05-23.
+This has been tested-working on Ubuntu 16.04, as of 2017-05-23.
 
 1. Download the script from the [*OpenUxAS* repository](https://github.com/afrl-rq/OpenUxAS/) (build_documentation.sh) OR `cd` to your `git clone`d *OpenUxAS* directory
 1. Run the script at the terminal: `./build_documentation.sh`
